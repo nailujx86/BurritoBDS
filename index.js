@@ -4,6 +4,8 @@ const { spawn } = require('child_process');
 const fs = require('fs-extra')
 const { EventEmitter } = require('events')
 const burrutil = require('./burrutil')
+const pidusage = require('pidusage')
+const { cpus } = require('os')
 
 class Burrito extends EventEmitter {
     constructor(pathToExecutable) {
@@ -37,7 +39,6 @@ class Burrito extends EventEmitter {
             }
             this.emit("stopped");
         });
-        return;
     }
     async initLog() {
         var logPath = this.serverDir + "/logs/log-" + new Date().getTime() + ".txt";
@@ -72,7 +73,7 @@ class Burrito extends EventEmitter {
             this.send("say Shutting down!");
         }
         return new Promise((resolve, reject) => {
-            //this.process.stdin.write("stop\n");
+            this.process.stdin.write("stop\n");
             var stopReason = "STOPPED"
             var timer = setTimeout(() => {
                 this.log("[burrito] Killing unresponsive server..\n")
@@ -85,14 +86,29 @@ class Burrito extends EventEmitter {
             });
         })
     }
-    async kill () {
+    async kill() {
         if (this.running) {
             await burrutil.delay(10)
             this.process.kill()
-            await burrutil.delay(10)
-            return;
+            await burrutil.delay(10)            
         }
-        return;
+    }
+    async getStats() {
+        return new Promise((resolve, reject) => {
+            if (!this.running) {
+                return reject(new Error("Server not started!"))
+            } else {
+                pidusage(this.process.pid).then(stat => {
+                    resolve({
+                        cpu: stat.cpu,
+                        mem: stat.memory,
+                        threads: cpus().length,
+                        pid: stat.pid,
+                        uptime: stat.elapsed
+                    })
+                }).catch(err => reject(err))
+            }
+        })
     }
     send(command) {
         if (this.process) {

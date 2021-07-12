@@ -17,6 +17,7 @@
   },
   "homepage": "https://github.com/nailujx86/BurritoBDS#readme",
   "dependencies": {
-    "fs-extra": "^9.0.1"
+    "fs-extra": "^9.0.1",
+    "pidusage": "^2.0.21"
   }
 }
