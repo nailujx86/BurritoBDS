@@ -2,6 +2,7 @@
 
 const { spawn } = require('child_process');
 const fs = require('fs-extra')
+const fsP = require('fs/promises')
 const { EventEmitter } = require('events')
 const burrutil = require('./burrutil')
 const pidusage = require('pidusage')
@@ -16,11 +17,11 @@ class Burrito extends EventEmitter {
         this.logFile = null;
         this.running = false;
     }
-    start() {
+    start(detached = false) {
         if (this.running && this.process && !this.process.killed) {
             throw new Error("Server already running!");
         }
-        this.process = spawn(this.executablePath.replace(/^.*(\/|\\)/, "./"), [], { cwd: this.serverDir, env: { "LD_LIBRARY_PATH": "." }, stdio: ["pipe", "pipe", "pipe"] });
+        this.process = spawn(this.executablePath.replace(/^.*(\/|\\)/, "./"), [], { cwd: this.serverDir, env: { "LD_LIBRARY_PATH": "." }, stdio: ["pipe", "pipe", "pipe"], detached: detached });
         this.running = true;
         this.initLog().then((file, err) => {
             if (err) {
@@ -50,10 +51,62 @@ class Burrito extends EventEmitter {
             return file;
         })
     }
+    async performBackup(timeout = 30) {
+        let backupPath = `${this.serverDir}/backups/backup-${new Date().getTime()}`
+        await fs.mkdirp(backupPath)
+        this.log("[burrito] Starting backup\n")
+        if(this.running) {
+            this.log("[burrito] Sending backup preparation command\n")
+            this.send("save hold")
+            let saving = false
+            let backedUp = false
+            let backupMatcher = /(\w[\w\s/.-]*):(\d+)/g
+            this.on('log', async(log) => {
+                if(!saving && !backedUp && log.toString().startsWith("Data saved. Files are now ready to be copied.")) {
+                    saving = true
+                    let m;
+                    let files = [];
+                    while(m = backupMatcher.exec(log.toString().split('\n')[1])) {
+                        files.push({
+                            path: m[1],
+                            bytes: m[2]
+                        })
+                    }
+                    let levelName = files[0].path.split('/')[0]                  
+                    await fs.ensureDir(`${backupPath}/${levelName}`)
+                    await fs.ensureDir(`${backupPath}/${levelName}/db/`)
+                    await Promise.all(files.map(file => {
+                        return fs.copyFile(`${this.serverDir}/worlds/${file.path}`, `${backupPath}/${file.path}`)
+                    }))
+                    this.log('[burrito] (1/2) Files backed up.\n')
+                    await Promise.all(files.map(file => {
+                        return fsP.truncate(`${backupPath}/${file.path}`, Number(file.bytes))
+                    }))
+                    this.log('[burrito] (2/2) Files truncated.\n')
+                    backedUp = true
+                }
+            })
+            while(true) { // TODO Handle Timeout
+                await burrutil.delay(2000);
+                if(!saving) {
+                    this.log("[burrito] Querying the server for backup status\n")
+                    this.send("save query")
+                } else if(backedUp) {
+                    this.log("[burrito] Backup complete!\n")
+                    this.send("save resume")
+                    return backupPath
+                }
+            }
+        }
+    }
     async log(data) {
         this.emit("log", data)
+        //TODO Process different logtypes
+        this.writeLog(data)
+    }
+    writeLog(data) {
         if(this.logFile) {
-            fs.write(this.logFile, data);
+            fs.write(this.logFile, data)
         }
     }
     async stop(gentle = false) {
